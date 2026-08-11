@@ -22,7 +22,9 @@
 //   - The prime-agent CLI on PATH (detection matches the `prime-agent` binary;
 //     build this repo and symlink packages/coding-agent/dist/bundle/cli.js).
 //   - The patch is pinned to the Orca 1.4.164 compiled layout. Other versions
-//     fail fast with "anchor not found" instead of silently mis-patching.
+//     fail fast: a missing artifact or an "anchor not found" mismatch aborts
+//     the run with a non-zero exit before "done." is printed — never a
+//     silently half-patched app reported as patched.
 //
 // After patching: quit and relaunch Orca, then pick "Prime Agent" from the
 // agent picker. The prefill/status extensions are written into
@@ -30,7 +32,8 @@
 //
 // Note: the directory-app layout breaks the app's macOS code-signature seal.
 // This is local-only (same as any user-writable /Applications bundle) and is
-// fully reverted by --restore.
+// fully reverted by --restore, including the patched copies under
+// app.asar.unpacked.
 //
 // Usage:
 //   node scripts/orca-add-prime-agent.mjs --app /Applications/Orca.app
@@ -40,6 +43,7 @@
 // Re-runnable: every patch is idempotent (skips files already patched).
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -53,6 +57,10 @@ import { fileURLToPath } from "node:url";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_APP = "/Applications/Orca.app";
 const ASAR_BACKUP_SUFFIX = ".bak-prime-agent";
+// Snapshot location for the original bytes of patched app.asar.unpacked files
+// (spawned CLI processes). Unpacked files live OUTSIDE app.asar, so the
+// archive backup cannot restore them — only this byte-for-byte copy can.
+const UNPACKED_BACKUP_SUFFIX = "app.asar.unpacked.bak-prime-agent";
 
 const CONFIG_ENTRY_SINGLE_QUOTE = [
   "    'prime-agent': {",
@@ -75,7 +83,7 @@ const CONFIG_ENTRY_DOUBLE_QUOTE = [
 ].join("\n");
 
 // ops: [relativePath, [{anchor, insert, mode}...]]
-const PATCHES = [
+export const PATCHES = [
   // 1. TUI agent config — shared (single quotes, 4-space indent).
   [
     "out/shared/tui-agent-config.js",
@@ -560,13 +568,35 @@ function primeAgentDiscoveries(options$1, wslHomeDirs, limit, issues) {
 // Patching
 // ---------------------------------------------------------------------------
 
-/** Apply all patches to an extracted app tree (out/ layout). Idempotent. */
-export function patchTree(treeRoot) {
+/**
+ * Apply all patches to an extracted app tree (out/ layout). Idempotent.
+ *
+ * requireAll=true (default) fails fast when any PATCHES target is missing.
+ * The patch is pinned to the Orca 1.4.164 compiled layout, and a missing
+ * artifact — e.g. a renamed content-hash chunk after an Orca update — means
+ * the layout differs. Skipping it would report success while leaving the app
+ * half-integrated (no picker entry, "Pi" labels, broken main-process wiring):
+ * exactly the silent mis-patch the header promises to avoid. Failing loudly
+ * forces the operator to decide (patch a --tree, update the script, or
+ * --restore) instead of being told "done."
+ *
+ * The unpacked tree passes requireAll=false: app.asar.unpacked is inherently
+ * a subset (Electron only unpacks what spawned processes need), so absent
+ * files there are normal and only the present copies are patched.
+ */
+export function patchTree(treeRoot, { requireAll = true } = {}) {
   const patched = [];
   const skipped = [];
   for (const [relPath, ops] of PATCHES) {
     const fullPath = join(treeRoot, relPath);
     if (!existsSync(fullPath)) {
+      if (requireAll) {
+        throw new Error(
+          `[${relPath}] file not found under ${treeRoot} — expected the pinned Orca 1.4.164 layout; ` +
+            "refusing to patch a partial tree (fail fast). If this is a different Orca version, " +
+            "this patch is not supported; run --restore to revert any earlier patch.",
+        );
+      }
       skipped.push(`${relPath} (absent)`);
       continue;
     }
@@ -592,12 +622,42 @@ export function patchTree(treeRoot) {
   return { patched, skipped };
 }
 
-/** Patch the duplicate copies under app.asar.unpacked (spawned CLI processes). */
+/**
+ * Patch the duplicate copies under app.asar.unpacked (spawned CLI processes).
+ *
+ * Unlike the main tree, app.asar.unpacked only holds the files Electron
+ * extracts for spawned processes, so PATCHES targets that are absent there
+ * are expected and skipped (requireAll=false); the archive copies are still
+ * patched. Before patching, the original bytes of every file we are about to
+ * modify are snapshotted to app.asar.unpacked.bak-prime-agent so --restore
+ * can revert them: unpacked files live OUTSIDE app.asar, so re-extracting
+ * the backup archive cannot recover their originals — only a byte copy can.
+ */
 export function patchUnpackedTree(resourcesDir) {
   const unpacked = join(resourcesDir, "app.asar.unpacked");
-  if (!existsSync(unpacked)) return { patched: [], skipped: ["no unpacked dir"] };
-  const result = patchTree(unpacked);
-  return result;
+  if (!existsSync(unpacked)) {
+    // Not a failure: there are no spawned-CLI copies to patch, and the
+    // archive copies are still patched, so the integration stays complete.
+    // Log it so the operator knows nothing was patched there.
+    return { patched: [], skipped: ["no unpacked dir"] };
+  }
+  const backupDir = join(resourcesDir, UNPACKED_BACKUP_SUFFIX);
+  const present = [];
+  for (const [relPath] of PATCHES) {
+    if (existsSync(join(unpacked, relPath))) present.push(relPath);
+  }
+  let backedUp = 0;
+  if (present.length > 0 && !existsSync(backupDir)) {
+    mkdirSync(backupDir, { recursive: true });
+    for (const relPath of present) {
+      const dest = join(backupDir, relPath);
+      mkdirSync(dirname(dest), { recursive: true });
+      copyFileSync(join(unpacked, relPath), dest);
+      backedUp++;
+    }
+    console.log(`backed up ${backedUp} original unpacked file(s) to ${backupDir}`);
+  }
+  return patchTree(unpacked, { requireAll: false });
 }
 
 /** Convert the installed app to the directory-app layout and patch it. */
@@ -620,11 +680,10 @@ export function patchInstalledApp(appPath) {
       rmSync(appDir, { recursive: true, force: true });
       throw new Error(`asar extract failed: ${res.stderr ?? res.stdout}`);
     }
-    console.log(`moving ${asar} -> ${backup}`);
-    renameSync(asar, backup);
+    moveAsarToBackup(asar, backup);
   } else if (existsSync(asar) && existsSync(appDir)) {
-    console.log(`moving ${asar} -> ${backup} (app dir already present)`);
-    renameSync(asar, backup);
+    // Directory-app layout already present; the archive is redundant.
+    moveAsarToBackup(asar, backup);
   }
 
   if (!existsSync(appDir)) {
@@ -649,16 +708,76 @@ export function patchInstalledApp(appPath) {
   return { appDir, backup };
 }
 
-/** Restore the original app.asar layout. */
+/**
+ * Move the original archive to the backup name without clobbering an existing
+ * backup. The backup is the only pristine copy of the archive; overwriting it
+ * would make --restore restore a modified file, so when one already exists we
+ * keep it and drop the redundant current archive instead.
+ */
+function moveAsarToBackup(asar, backup) {
+  if (existsSync(backup)) {
+    console.log(`keeping existing ${backup}; removing redundant ${asar}`);
+    rmSync(asar, { force: true });
+  } else {
+    console.log(`moving ${asar} -> ${backup}`);
+    renameSync(asar, backup);
+  }
+}
+
+/**
+ * Restore the original app.asar layout and revert every patch artifact.
+ *
+ * Two safety properties, both deliberate:
+ *
+ * 1. Non-destructive by provenance. The extracted app dir is only deleted
+ *    when the patch backup (app.asar.bak-prime-agent) exists — that backup
+ *    is the proof this script created the directory-app layout. Without it,
+ *    an app dir may be the application's NATIVE layout (some builds ship
+ *    unpacked), and deleting it would destroy the installation — so
+ *    --restore refuses instead.
+ *
+ * 2. Complete revert. patchInstalledApp also patches the copies under
+ *    app.asar.unpacked (spawned CLI processes). Those files live outside
+ *    app.asar, so the archive backup does not contain their original bytes;
+ *    --restore reverts them from the snapshot taken at patch time
+ *    (app.asar.unpacked.bak-prime-agent) before removing the snapshot.
+ */
 export function restoreInstalledApp(appPath) {
   const resources = join(appPath, "Contents", "Resources");
   const asar = join(resources, "app.asar");
   const appDir = join(resources, "app");
   const backup = `${asar}${ASAR_BACKUP_SUFFIX}`;
+  const unpacked = join(resources, "app.asar.unpacked");
+  const unpackedBackup = join(resources, UNPACKED_BACKUP_SUFFIX);
+
+  if (!existsSync(backup)) {
+    if (existsSync(appDir)) {
+      throw new Error(
+        `found extracted app dir (${appDir}) but no patch backup (${backup}) — refusing to delete it: ` +
+          "the app may use the directory-app layout natively. If this app was patched by an older " +
+          "version of this script, restore the backup manually.",
+      );
+    }
+    console.log("nothing to restore (no patch backup found)");
+    return;
+  }
+
+  // Revert the patched unpacked copies from the patch-time snapshot.
+  if (existsSync(unpackedBackup)) {
+    let restored = 0;
+    for (const [relPath] of PATCHES) {
+      const src = join(unpackedBackup, relPath);
+      if (!existsSync(src)) continue;
+      copyFileSync(src, join(unpacked, relPath));
+      restored++;
+    }
+    rmSync(unpackedBackup, { recursive: true, force: true });
+    console.log(`reverted ${restored} patched file(s) in app.asar.unpacked`);
+  }
+
   if (existsSync(appDir)) rmSync(appDir, { recursive: true, force: true });
-  if (existsSync(backup) && !existsSync(asar)) renameSync(backup, asar);
-  if (existsSync(asar)) console.log("restored app.asar");
-  else console.log("nothing to restore");
+  if (!existsSync(asar)) renameSync(backup, asar);
+  console.log("restored app.asar (patch fully reverted)");
 }
 
 // ---------------------------------------------------------------------------
