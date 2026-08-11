@@ -155,6 +155,46 @@ const PATCHES = [
       },
     ],
   ],
+  // 6b. Synthetic title profiles — main-process chunk + renderer/web
+  // title-owner chunks bundle their OWN inline copies; without them the
+  // renderer cannot normalize a prime-agent pane's pi-compatible title to
+  // the "Prime Agent" label and falls back to "Pi".
+  [
+    "out/main/chunks/daemon-ready-identity-ChMsnp5C.js",
+    [
+      {
+        anchor:
+          'pi: {\n\t\tworkingLabel: "Pi",\n\t\tpermissionLabel: "Pi - action required",\n\t\tidleLabel: "Pi ready",\n\t\ttitleIdentityGroup: "pi-compatible"\n\t},',
+        insert:
+          '\n\t\'prime-agent\': {\n\t\tworkingLabel: "Prime Agent",\n\t\tpermissionLabel: "Prime Agent - action required",\n\t\tidleLabel: "Prime Agent ready",\n\t\ttitleIdentityGroup: "pi-compatible"\n\t},',
+        mode: "after",
+      },
+    ],
+  ],
+  [
+    "out/renderer/assets/agent-title-owner-_bbo0lTs.js",
+    [
+      {
+        anchor:
+          'pi: {\n\t\tworkingLabel: "Pi",\n\t\tpermissionLabel: "Pi - action required",\n\t\tidleLabel: "Pi ready",\n\t\ttitleIdentityGroup: "pi-compatible"\n\t},',
+        insert:
+          '\n\t\'prime-agent\': {\n\t\tworkingLabel: "Prime Agent",\n\t\tpermissionLabel: "Prime Agent - action required",\n\t\tidleLabel: "Prime Agent ready",\n\t\ttitleIdentityGroup: "pi-compatible"\n\t},',
+        mode: "after",
+      },
+    ],
+  ],
+  [
+    "out/web/assets/agent-title-owner-_bbo0lTs.js",
+    [
+      {
+        anchor:
+          'pi:{workingLabel:"Pi",permissionLabel:"Pi - action required",idleLabel:"Pi ready",titleIdentityGroup:"pi-compatible"}',
+        insert:
+          '"prime-agent":{workingLabel:"Prime Agent",permissionLabel:"Prime Agent - action required",idleLabel:"Prime Agent ready",titleIdentityGroup:"pi-compatible"},',
+        mode: "before",
+      },
+    ],
+  ],
   // 7. Renderer + web agent catalog (UI picker entry; web copy is minified).
   [
     "out/renderer/assets/agent-catalog-1Y3pTpm8.js",
