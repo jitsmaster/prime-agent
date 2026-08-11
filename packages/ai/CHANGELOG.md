@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Updated the model catalog from live provider data (removed stale Anthropic and GitHub Copilot entries, corrected an OpenAI-completions token limit).
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05
