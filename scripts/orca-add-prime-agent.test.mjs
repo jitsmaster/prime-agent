@@ -42,6 +42,9 @@ const FIXTURE_FILES = [
   "out/shared/tui-agent-display-names.js",
   "out/shared/agent-kind.js",
   "out/shared/synthetic-agent-title.js",
+  "out/main/chunks/daemon-ready-identity-ChMsnp5C.js",
+  "out/renderer/assets/agent-title-owner-_bbo0lTs.js",
+  "out/web/assets/agent-title-owner-_bbo0lTs.js",
   "out/main/chunks/tui-agent-config-x5jBLMn6.js",
   "out/main/index.js",
   "out/renderer/assets/store-BgJxB0hr.js",
@@ -136,6 +139,25 @@ test("display names, agent kind, and title profiles include prime-agent", () => 
     idleLabel: "Prime Agent ready",
     titleIdentityGroup: "pi-compatible",
   });
+
+  // The main chunk and renderer/web title-owner chunks bundle their own inline
+  // copies of the profiles; all of them must carry prime-agent or the pane
+  // label falls back to "Pi" for pi-compatible titles.
+  for (const rel of [
+    "out/main/chunks/daemon-ready-identity-ChMsnp5C.js",
+    "out/renderer/assets/agent-title-owner-_bbo0lTs.js",
+  ]) {
+    const src = readFileSync(join(fixtureDir, rel), "utf8");
+    assert.ok(src.includes('workingLabel: "Prime Agent"'), `${rel}: missing prime-agent profile`);
+  }
+  const webTitleOwner = readFileSync(
+    join(fixtureDir, "out/web/assets/agent-title-owner-_bbo0lTs.js"),
+    "utf8",
+  );
+  assert.ok(
+    webTitleOwner.includes('"prime-agent":{workingLabel:"Prime Agent"'),
+    "web title-owner: missing prime-agent profile",
+  );
 });
 
 test("renderer catalog lists Prime Agent with the right command", () => {
