@@ -2,6 +2,15 @@
 // TDD seam S1: the Orca patch produces structurally valid, consistent artifacts.
 // Fixture: copies of the real installed app's files (extracted from app.asar),
 // patched in a temp tree — never touches the installed app.
+//
+// Run:   node --test scripts/orca-add-prime-agent.test.mjs
+// Requires an installed Orca app (override with ORCA_APP=/path/to/Orca.app)
+// and network on first run (npx fetches @electron/asar for extraction).
+// Asserts, per patched artifact: the prime-agent config entry + exact shape,
+// display name, telemetry kind, title profile, renderer/web catalog entries,
+// main-process machinery (prefill env, .prime home dir, overlays, session
+// scanning), relay bundles, syntactic validity of out/main/index.js,
+// idempotency on re-run, and that the built prime-agent CLI answers --version.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, cpSync, existsSync, readFileSync, symlinkSync } from "node:fs";

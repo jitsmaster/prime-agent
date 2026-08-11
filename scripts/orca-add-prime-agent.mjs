@@ -10,13 +10,34 @@
 // (backup app.asar, extract to Resources/app), which is the standard safe way
 // to patch an asar-based Electron app without risking a broken repack.
 //
-// Re-runnable: every patch is idempotent (skips files already patched).
-// Orca updates replace the whole .app; re-run this script after an update.
+// STOPGAP: the durable fix is upstream. stablyai/orca main already ships most
+// prime-agent support and the completion PR lands the rest, so once an Orca
+// release with native support is installed this script is unnecessary (run
+// --restore to revert to the original asar layout). Until then, Orca updates
+// replace the whole .app and the patch must be re-applied after each update.
+//
+// Prerequisites:
+//   - Node >= 22 on PATH, plus network access on first run (npx downloads
+//     @electron/asar for extraction).
+//   - The prime-agent CLI on PATH (detection matches the `prime-agent` binary;
+//     build this repo and symlink packages/coding-agent/dist/bundle/cli.js).
+//   - The patch is pinned to the Orca 1.4.164 compiled layout. Other versions
+//     fail fast with "anchor not found" instead of silently mis-patching.
+//
+// After patching: quit and relaunch Orca, then pick "Prime Agent" from the
+// agent picker. The prefill/status extensions are written into
+// ~/.prime/agent/extensions/ by the patched app at launch time.
+//
+// Note: the directory-app layout breaks the app's macOS code-signature seal.
+// This is local-only (same as any user-writable /Applications bundle) and is
+// fully reverted by --restore.
 //
 // Usage:
 //   node scripts/orca-add-prime-agent.mjs --app /Applications/Orca.app
 //   node scripts/orca-add-prime-agent.mjs --tree /path/to/extracted/tree
 //   node scripts/orca-add-prime-agent.mjs --restore --app /Applications/Orca.app
+//
+// Re-runnable: every patch is idempotent (skips files already patched).
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
